@@ -190,5 +190,5 @@ private fun CrashDialog(report: String, onDismiss: () -> Unit) {
 
 object BuildConfigInfo {
     const val VERSION = "1.0.1"
-    const val REPO = "https://github.com/momento-app/momento"
+    const val REPO = "https://github.com/3o05/momento"
 }
