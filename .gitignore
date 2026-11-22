@@ -1,0 +1,18 @@
+# Compilación
+.gradle/
+build/
+app/build/
+local.properties
+*.iml
+.idea/
+.DS_Store
+captures/
+.kotlin/
+
+# FIRMA: nunca subir a GitHub
+*.jks
+*.keystore
+keystore.properties
+
+# Capturas generadas por los tests
+app/screenshots/
