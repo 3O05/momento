@@ -27,6 +27,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -53,7 +55,10 @@ fun LivePhoto(
 
     val player = remember(video) {
         video?.let { f ->
-            ExoPlayer.Builder(context).build().apply {
+            ExoPlayer.Builder(context)
+                .setAudioAttributes(androidx.media3.common.AudioAttributes.DEFAULT, true)
+                .setHandleAudioBecomingNoisy(true)
+                .build().apply {
                 setMediaItem(MediaItem.fromUri(android.net.Uri.fromFile(f)))
                 prepare()
                 val self = this
@@ -68,7 +73,10 @@ fun LivePhoto(
             }
         }
     }
-    DisposableEffect(player) { onDispose { player?.release() } }
+    DisposableEffect(player) { onDispose { player?.stop(); player?.release() } }
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
+        player?.pause(); playing = false; showVideo = false
+    }
 
     fun play() {
         val p = player ?: return

@@ -10,10 +10,6 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
-import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -25,7 +21,11 @@ import app.momento.fotos.core.Exporter
 import app.momento.fotos.core.Quality
 import app.momento.fotos.core.VideoFrames
 import app.momento.fotos.core.VideoInfo
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -40,7 +40,15 @@ sealed interface ExportState {
 }
 
 @OptIn(UnstableApi::class)
-class EditorViewModel(app: Application, val source: Uri) : AndroidViewModel(app) {
+/**
+ * Estado del editor. Su vida está atada a la pantalla del editor: al salir se llama [release],
+ * que detiene el audio y libera el reproductor y el lector de fotogramas.
+ */
+class EditorViewModel(private val app: Application, val source: Uri) {
+
+    private val viewModelScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var released = false
+
 
     companion object {
         const val MIN_CLIP = 500L
@@ -48,11 +56,6 @@ class EditorViewModel(app: Application, val source: Uri) : AndroidViewModel(app)
         const val DEFAULT_CLIP = 3_000L
         const val DETAIL_SPAN = 15_000L
         const val STRIP_FRAMES = 9
-
-        fun factory(app: Application, uri: Uri) = object : ViewModelProvider.Factory {
-            @Suppress("UNCHECKED_CAST")
-            override fun <T : ViewModel> create(modelClass: Class<T>): T = EditorViewModel(app, uri) as T
-        }
     }
 
     private var frames: VideoFrames? = null
@@ -83,7 +86,10 @@ class EditorViewModel(app: Application, val source: Uri) : AndroidViewModel(app)
     var exportState by mutableStateOf<ExportState>(ExportState.Idle); private set
     var exportProgress by mutableFloatStateOf(0f); private set
 
-    val player: ExoPlayer = ExoPlayer.Builder(app).build().apply {
+    val player: ExoPlayer = ExoPlayer.Builder(app)
+        .setAudioAttributes(androidx.media3.common.AudioAttributes.DEFAULT, /* handleAudioFocus = */ true)
+        .setHandleAudioBecomingNoisy(true)
+        .build().apply {
         setSeekParameters(SeekParameters.EXACT)
         repeatMode = Player.REPEAT_MODE_OFF
         addListener(object : Player.Listener {
@@ -134,7 +140,7 @@ class EditorViewModel(app: Application, val source: Uri) : AndroidViewModel(app)
     }
 
     // ---------- Reproducción ----------
-    fun togglePlay() {
+    fun togglePlay() = safe {
         if (player.isPlaying) player.pause()
         else {
             if (player.currentPosition !in startMs until endMs - 50) player.seekTo(startMs)
@@ -142,26 +148,49 @@ class EditorViewModel(app: Application, val source: Uri) : AndroidViewModel(app)
         }
     }
 
+    private var lastSeekAt = 0L
+    private var dragging = false
+
     private fun scrubTo(ms: Long) {
         player.pause()
-        player.seekTo(ms)
         playheadMs = ms
+        val now = android.os.SystemClock.uptimeMillis()
+        if (dragging) {
+            if (now - lastSeekAt < 70) return   // no saturar el decodificador
+            player.setSeekParameters(SeekParameters.CLOSEST_SYNC)
+        } else {
+            player.setSeekParameters(SeekParameters.EXACT)
+        }
+        lastSeekAt = now
+        player.seekTo(ms)
     }
 
-    fun seek(ms: Long) = scrubTo(ms.coerceIn(startMs, endMs))
+    fun dragStarted() { dragging = true }
+
+    fun endDrag() = safe { settle() }
+
+    /** Al soltar: búsqueda exacta en la posición final. */
+    private fun settle() {
+        dragging = false
+        player.setSeekParameters(SeekParameters.EXACT)
+        player.seekTo(playheadMs)
+        lastSeekAt = 0L
+    }
+
+    fun seek(ms: Long) = safe { scrubTo(ms.coerceIn(startMs, endMs)) }
 
     // ---------- Recorte ----------
-    fun setStart(ms: Long) {
+    fun setStart(ms: Long) = safe {
         val v = ms.coerceIn(maxOf(0L, endMs - MAX_CLIP), endMs - MIN_CLIP)
         startMs = v; clampCover(); scrubTo(v)
     }
 
-    fun setEnd(ms: Long) {
+    fun setEnd(ms: Long) = safe {
         val v = ms.coerceIn(startMs + MIN_CLIP, minOf(duration, startMs + MAX_CLIP))
         endMs = v; clampCover(); scrubTo(v)
     }
 
-    fun moveSelection(newStart: Long) {
+    fun moveSelection(newStart: Long) = safe {
         val len = endMs - startMs
         val s = newStart.coerceIn(0L, duration - len)
         val coverRel = coverMs - startMs
@@ -173,7 +202,7 @@ class EditorViewModel(app: Application, val source: Uri) : AndroidViewModel(app)
     }
 
     /** Ajusta la duración manteniendo el inicio (o retrocediéndolo si no cabe). */
-    fun setLength(len: Long) {
+    fun setLength(len: Long) = safe {
         val l = len.coerceIn(MIN_CLIP, minOf(MAX_CLIP, duration))
         var s = startMs
         if (s + l > duration) s = duration - l
@@ -185,11 +214,12 @@ class EditorViewModel(app: Application, val source: Uri) : AndroidViewModel(app)
         loadClipThumbs()
     }
 
-    fun commitTrim() {
+    fun commitTrim() = safe {
+        settle()
         loadClipThumbs()
     }
 
-    fun setViewStart(ms: Long) {
+    fun setViewStart(ms: Long) = safe {
         val v = ms.coerceIn(0L, (duration - viewSpanMs).coerceAtLeast(0L))
         if (v != viewStartMs) { viewStartMs = v; loadDetail() }
     }
@@ -205,7 +235,7 @@ class EditorViewModel(app: Application, val source: Uri) : AndroidViewModel(app)
     }
 
     // ---------- Portada ----------
-    fun setCover(ms: Long) {
+    fun setCover(ms: Long) = safe {
         coverMs = ms.coerceIn(startMs, endMs - 1)
         scrubTo(coverMs)
         loadCoverThumb()
@@ -220,9 +250,9 @@ class EditorViewModel(app: Application, val source: Uri) : AndroidViewModel(app)
         }
     }
 
-    fun coverFromPlayhead() = setCover(player.currentPosition)
+    fun coverFromPlayhead() = safe { setCover(player.currentPosition) }
 
-    fun onTabSelected(t: EditorTab) {
+    fun onTabSelected(t: EditorTab) = safe {
         tab = t
         if (t == EditorTab.COVER) scrubTo(coverMs)
     }
@@ -276,7 +306,7 @@ class EditorViewModel(app: Application, val source: Uri) : AndroidViewModel(app)
         viewModelScope.launch {
             exportState = try {
                 val out = Exporter.export(
-                    getApplication(), source, i,
+                    app, source, i,
                     ExportSettings(startMs, endMs, coverMs, mute, quality),
                 ) { p, stage ->
                     exportProgress = p
@@ -292,7 +322,24 @@ class EditorViewModel(app: Application, val source: Uri) : AndroidViewModel(app)
 
     fun dismissExport() { exportState = ExportState.Idle }
 
-    override fun onCleared() {
+    /** Un gesto nunca debe cerrar la app: si algo falla, se registra y se ignora. */
+    private inline fun safe(block: () -> Unit) {
+        if (released || info == null) return
+        try { block() } catch (e: Exception) {
+            android.util.Log.w("Momento", "Editor", e)
+        }
+    }
+
+    /** Pausa (al salir de la app o al cambiar de pantalla). */
+    fun pause() {
+        if (!released) player.pause()
+    }
+
+    fun release() {
+        if (released) return
+        released = true
+        viewModelScope.cancel()
+        player.stop()
         player.release()
         frames?.close()
     }

@@ -7,6 +7,7 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 data class VideoInfo(
@@ -21,6 +22,11 @@ data class VideoInfo(
 class VideoFrames(private val context: Context, private val uri: Uri) : AutoCloseable {
 
     private val retriever = MediaMetadataRetriever().apply { setDataSource(context, uri) }
+    @Volatile private var closed = false
+
+    /** MediaMetadataRetriever no es seguro entre hilos: todo pasa por un solo hilo. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val io = Dispatchers.IO.limitedParallelism(1)
 
     val info: VideoInfo by lazy {
         fun key(k: Int) = retriever.extractMetadata(k)
@@ -38,8 +44,9 @@ class VideoFrames(private val context: Context, private val uri: Uri) : AutoClos
     }
 
     /** Miniatura pequeña para la línea de tiempo. */
-    suspend fun thumbnail(timeMs: Long, maxSide: Int): Bitmap? = withContext(Dispatchers.IO) {
-        synchronized(retriever) {
+    suspend fun thumbnail(timeMs: Long, maxSide: Int): Bitmap? = withContext(io) {
+        if (closed) return@withContext null
+        run {
             runCatching {
                 val us = timeMs * 1000
                 val bmp = if (Build.VERSION.SDK_INT >= 27) {
@@ -55,8 +62,9 @@ class VideoFrames(private val context: Context, private val uri: Uri) : AutoClos
     }
 
     /** Fotograma exacto a resolución completa (para la foto de portada). */
-    suspend fun fullFrame(timeMs: Long): Bitmap? = withContext(Dispatchers.IO) {
-        synchronized(retriever) {
+    suspend fun fullFrame(timeMs: Long): Bitmap? = withContext(io) {
+        if (closed) return@withContext null
+        run {
             runCatching {
                 val us = timeMs * 1000
                 (retriever.getFrameAtTime(us, MediaMetadataRetriever.OPTION_CLOSEST)
@@ -88,7 +96,10 @@ class VideoFrames(private val context: Context, private val uri: Uri) : AutoClos
         return if (s >= 1f) w to h else (w * s).toInt().coerceAtLeast(1) to (h * s).toInt().coerceAtLeast(1)
     }
 
+    /** Se libera en el mismo hilo, después de cualquier miniatura en curso. */
     override fun close() {
-        runCatching { retriever.release() }
+        if (closed) return
+        closed = true
+        kotlinx.coroutines.CoroutineScope(io).launch { runCatching { retriever.release() } }
     }
 }

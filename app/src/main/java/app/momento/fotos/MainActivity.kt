@@ -20,6 +20,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -28,7 +29,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
-import androidx.lifecycle.viewmodel.compose.viewModel
+import app.momento.fotos.core.CrashLog
 import app.momento.fotos.core.ExportOutput
 import app.momento.fotos.core.SavedMoment
 import app.momento.fotos.ui.screens.EditorScreen
@@ -52,6 +53,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
+        CrashLog.install(this)
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
@@ -82,6 +84,7 @@ class MainActivity : ComponentActivity() {
     private fun App() {
         var refresh by remember { mutableIntStateOf(0) }
         var showAbout by remember { mutableStateOf(false) }
+        var lastCrash by remember { mutableStateOf(CrashLog.take(this@MainActivity)) }
 
         Box(Modifier.fillMaxSize().background(Palette.Bg)) {
             AnimatedContent(
@@ -106,14 +109,14 @@ class MainActivity : ComponentActivity() {
                     )
 
                     is Screen.Editor -> {
-                        val vm: EditorViewModel = viewModel(
-                            key = "editor-${s.session}",
-                            factory = EditorViewModel.factory(application, s.uri),
-                        )
+                        // El editor vive solo mientras está en pantalla: al salir se libera
+                        // el reproductor (sin audio fantasma ni memoria acumulada).
+                        val vm = remember(s.session) { EditorViewModel(application, s.uri) }
+                        DisposableEffect(vm) { onDispose { vm.release() } }
                         EditorScreen(
                             vm,
-                            onClose = { screen = Screen.Home },
-                            onDone = { out -> refresh++; screen = Screen.Result(out) },
+                            onClose = { vm.pause(); screen = Screen.Home },
+                            onDone = { out -> vm.pause(); refresh++; screen = Screen.Result(out) },
                         )
                     }
 
@@ -133,6 +136,7 @@ class MainActivity : ComponentActivity() {
         }
 
         if (showAbout) AboutDialog { showAbout = false }
+        lastCrash?.let { report -> CrashDialog(report) { lastCrash = null } }
     }
 }
 
@@ -161,7 +165,30 @@ private fun AboutDialog(onDismiss: () -> Unit) {
     )
 }
 
+@Composable
+private fun CrashDialog(report: String, onDismiss: () -> Unit) {
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Palette.Surface2,
+        title = { Text("La app se cerró la última vez", style = MaterialTheme.typography.titleMedium) },
+        text = {
+            Text(
+                "Copia el detalle y repórtalo en GitHub para que se pueda corregir.\n\n" +
+                    report.lineSequence().take(8).joinToString("\n"),
+                style = MaterialTheme.typography.bodySmall, color = Palette.TextDim,
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                clipboard.setText(androidx.compose.ui.text.AnnotatedString(report)); onDismiss()
+            }) { Text("Copiar error", color = Palette.Sky) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cerrar", color = Palette.TextDim) } },
+    )
+}
+
 object BuildConfigInfo {
-    const val VERSION = "1.0.0"
+    const val VERSION = "1.0.1"
     const val REPO = "https://github.com/momento-app/momento"
 }

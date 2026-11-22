@@ -60,6 +60,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import app.momento.fotos.core.ExportOutput
 import app.momento.fotos.core.Quality
 import app.momento.fotos.ui.components.CoverPicker
@@ -84,6 +86,9 @@ fun EditorScreen(
     val running = vm.exportState is ExportState.Running
 
     BackHandler(enabled = !running) { onClose() }
+
+    // Al salir de la app (botón inicio, otra app, pantalla apagada) se pausa el video.
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { vm.pause() }
 
     LaunchedEffect(vm.exportState) {
         (vm.exportState as? ExportState.Done)?.let { onDone(it.output); vm.dismissExport() }
@@ -240,6 +245,7 @@ private fun TrimPanel(vm: EditorViewModel) {
                 vm.moveSelection(c - len / 2)
             },
             onDragEnd = vm::commitTrim,
+            onDragStart = vm::dragStarted,
         )
         Spacer(Modifier.height(6.dp))
     } else Spacer(Modifier.height(20.dp))
@@ -250,6 +256,7 @@ private fun TrimPanel(vm: EditorViewModel) {
         start = vm.startMs, end = vm.endMs, cover = vm.coverMs, playhead = vm.playheadMs,
         onStart = vm::setStart, onEnd = vm::setEnd, onMove = vm::moveSelection,
         onSeek = vm::seek, onDragEnd = vm::commitTrim,
+        onDragStart = vm::dragStarted,
     )
     Spacer(Modifier.height(12.dp))
     Row(
@@ -275,7 +282,10 @@ private fun TrimPanel(vm: EditorViewModel) {
 @Composable
 private fun CoverPanel(vm: EditorViewModel) {
     Spacer(Modifier.height(10.dp))
-    CoverPicker(vm.clipThumbs, vm.startMs, vm.endMs, vm.coverMs, vm.coverThumb, onCover = vm::setCover)
+    CoverPicker(
+        vm.clipThumbs, vm.startMs, vm.endMs, vm.coverMs, vm.coverThumb,
+        onCover = vm::setCover, onDragStart = vm::dragStarted, onDragEnd = vm::endDrag,
+    )
     Spacer(Modifier.height(12.dp))
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 18.dp),

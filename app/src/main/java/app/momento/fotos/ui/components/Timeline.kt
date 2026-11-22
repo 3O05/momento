@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -70,6 +71,7 @@ fun TrimTimeline(
     onSeek: (Long) -> Unit,
     onDragEnd: () -> Unit,
     modifier: Modifier = Modifier,
+    onDragStart: () -> Unit = {},
 ) {
     val density = LocalDensity.current
     val handleW = with(density) { 16.dp.toPx() }
@@ -79,7 +81,7 @@ fun TrimTimeline(
     val sStart by rememberUpdatedState(start)
     val sEnd by rememberUpdatedState(end)
 
-    BoxWithConstraints(modifier.fillMaxWidth().height(68.dp).padding(horizontal = 18.dp)) {
+    BoxWithConstraints(modifier.fillMaxWidth().systemGestureExclusion().height(68.dp).padding(horizontal = 30.dp)) {
         val w = with(density) { maxWidth.toPx() }
         fun xOf(ms: Long) = ((ms - sView).toFloat() / sSpan) * w
         fun msOf(x: Float) = sView + ((x / w) * sSpan).toLong()
@@ -115,6 +117,7 @@ fun TrimTimeline(
                                 else -> DragMode.NONE
                             }
                             anchorMs = msOf(p.x); anchorStart = sStart
+                            onDragStart()
                         },
                         onDragEnd = { mode = DragMode.NONE; onDragEnd() },
                         onDragCancel = { mode = DragMode.NONE; onDragEnd() },
@@ -193,10 +196,11 @@ fun OverviewBar(
     onCenterAt: (Long) -> Unit,
     onDragEnd: () -> Unit,
     modifier: Modifier = Modifier,
+    onDragStart: () -> Unit = {},
 ) {
     val density = LocalDensity.current
     val dur by rememberUpdatedState(duration)
-    BoxWithConstraints(modifier.fillMaxWidth().height(34.dp).padding(horizontal = 34.dp)) {
+    BoxWithConstraints(modifier.fillMaxWidth().systemGestureExclusion().height(34.dp).padding(horizontal = 40.dp)) {
         val w = with(density) { maxWidth.toPx() }
         fun msOf(x: Float) = ((x / w).coerceIn(0f, 1f) * dur).toLong()
         ThumbStrip(thumbs, Modifier.fillMaxSize().padding(vertical = 4.dp).clip(RoundedCornerShape(7.dp)))
@@ -208,7 +212,7 @@ fun OverviewBar(
                 }
                 .pointerInput(w) {
                     detectDragGestures(
-                        onDragStart = { onCenterAt(msOf(it.x)) },
+                        onDragStart = { onDragStart(); onCenterAt(msOf(it.x)) },
                         onDragEnd = onDragEnd,
                         onDragCancel = onDragEnd,
                         onDrag = { c, _ -> c.consume(); onCenterAt(msOf(c.position.x)) },
@@ -240,11 +244,13 @@ fun CoverPicker(
     coverThumb: Bitmap?,
     onCover: (Long) -> Unit,
     modifier: Modifier = Modifier,
+    onDragStart: () -> Unit = {},
+    onDragEnd: () -> Unit = {},
 ) {
     val density = LocalDensity.current
     val s by rememberUpdatedState(start)
     val e by rememberUpdatedState(end)
-    BoxWithConstraints(modifier.fillMaxWidth().height(76.dp).padding(horizontal = 18.dp)) {
+    BoxWithConstraints(modifier.fillMaxWidth().systemGestureExclusion().height(76.dp).padding(horizontal = 24.dp)) {
         val w = with(density) { maxWidth.toPx() }
         val frameW = with(density) { 46.dp.toPx() }
         fun msOf(x: Float) = s + (((x - frameW / 2) / (w - frameW)).coerceIn(0f, 1f) * (e - s - 1)).toLong()
@@ -277,7 +283,9 @@ fun CoverPicker(
                 .pointerInput(w) { detectTapGestures { onCover(msOf(it.x)) } }
                 .pointerInput(w) {
                     detectDragGestures(
-                        onDragStart = { onCover(msOf(it.x)) },
+                        onDragStart = { onDragStart(); onCover(msOf(it.x)) },
+                        onDragEnd = onDragEnd,
+                        onDragCancel = onDragEnd,
                         onDrag = { c, _ -> c.consume(); onCover(msOf(c.position.x)) },
                     )
                 }
